@@ -46,7 +46,7 @@ import {
   getTaskBasePoints,
   getTaskDifficulty,
 } from "@/lib/calculations";
-import { initialState } from "@/lib/sample-data";
+import { createLiveProjectState, initialState } from "@/lib/sample-data";
 import { getCloudConfig } from "@/lib/cloud-config";
 import {
   clearLocalState,
@@ -139,8 +139,12 @@ export default function GuildBoardApp() {
     state: "loading",
     message: "正在加载项目状态",
   });
-  const [selectedRaterId, setSelectedRaterId] = useState(initialState.members[0].id);
-  const [selectedTargetId, setSelectedTargetId] = useState(initialState.members[1].id);
+  const [selectedRaterId, setSelectedRaterId] = useState(
+    initialState.members[0]?.id ?? "",
+  );
+  const [selectedTargetId, setSelectedTargetId] = useState(
+    initialState.members[1]?.id ?? "",
+  );
   const [reviewScores, setReviewScores] = useState({
     reliability: 4,
     collaboration: 4,
@@ -150,8 +154,8 @@ export default function GuildBoardApp() {
     note: "",
   });
   const [appealForm, setAppealForm] = useState({
-    memberId: initialState.members[0].id,
-    taskId: initialState.tasks[0].id,
+    memberId: initialState.members[0]?.id ?? "",
+    taskId: initialState.tasks[0]?.id ?? "",
     reason: "",
   });
   const [prizeForm, setPrizeForm] = useState({
@@ -164,8 +168,8 @@ export default function GuildBoardApp() {
     title: "",
     discipline: "设计",
     module: "",
-    ownerId: initialState.members[0].id,
-    reviewerId: initialState.members[7].id,
+    ownerId: initialState.members[0]?.id ?? "",
+    reviewerId: initialState.members[0]?.id ?? "",
     difficultyPlanner: 3,
     difficultyAi: 3,
     difficultyMember: 3,
@@ -509,8 +513,8 @@ export default function GuildBoardApp() {
     }));
   };
 
-  const resetDemo = () => {
-    setState(initialState);
+  const enterLiveMode = () => {
+    setState((current) => createLiveProjectState(current));
     clearLocalState();
   };
 
@@ -550,7 +554,7 @@ export default function GuildBoardApp() {
           <div className="flex flex-col gap-3 lg:items-end">
             <AuthWidget auth={auth} />
             <div className="flex flex-wrap gap-2">
-              <IconButton icon={RotateCcw} label="重置演示数据" onClick={resetDemo} />
+              <IconButton icon={RotateCcw} label="进入实战模式" onClick={enterLiveMode} />
               <IconButton
                 icon={Save}
                 label={persistenceStatus.state === "error" ? "保存异常" : "已自动保存"}
@@ -609,7 +613,19 @@ export default function GuildBoardApp() {
           />
         )}
 
-        {tab === "members" && <MemberPanel auth={auth} />}
+        {tab === "members" && (
+          <MemberPanel
+            auth={auth}
+            onSyncMembers={(cloudMembers) =>
+              setState((current) => ({
+                ...current,
+                members: cloudMembers
+                  .filter((member) => member.approvalStatus === "approved")
+                  .map(mapCloudMemberToProjectMember),
+              }))
+            }
+          />
+        )}
 
         {tab === "github" && <GitHubPanel state={state} />}
 
@@ -1158,7 +1174,13 @@ function TaskTable({
   );
 }
 
-function MemberPanel({ auth }: { auth: ReturnType<typeof useSupabaseAuth> }) {
+function MemberPanel({
+  auth,
+  onSyncMembers,
+}: {
+  auth: ReturnType<typeof useSupabaseAuth>;
+  onSyncMembers: (members: CloudProjectMember[]) => void;
+}) {
   const config = getCloudConfig();
   const accessToken = auth.session?.access_token;
   const [members, setMembers] = useState<CloudProjectMember[]>([]);
@@ -1361,7 +1383,18 @@ function MemberPanel({ auth }: { auth: ReturnType<typeof useSupabaseAuth> }) {
         <div className="rounded-md border border-stone-300 bg-white p-4">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <SectionTitle icon={Users} title="云端成员" />
-            <IconButton icon={RefreshCw} label="刷新" onClick={refresh} disabled={loading} />
+            <div className="flex flex-wrap gap-2">
+              <IconButton icon={RefreshCw} label="刷新" onClick={refresh} disabled={loading} />
+              <IconButton
+                icon={Users}
+                label="同步到任务成员池"
+                onClick={() => {
+                  onSyncMembers(members);
+                  setMessage("已把批准成员同步到任务负责人/互评成员池");
+                }}
+                disabled={loading}
+              />
+            </div>
           </div>
           <p className="mt-3 rounded-md border border-stone-200 bg-stone-50 px-3 py-2 text-sm text-stone-700">
             {message}
@@ -2373,4 +2406,23 @@ function formatAccessLevel(level: string) {
   };
 
   return labels[level] ?? level;
+}
+
+function mapCloudMemberToProjectMember(member: CloudProjectMember): Member {
+  const roleByAccess: Record<ProjectAccessLevel, Member["role"]> = {
+    owner: "主策",
+    planner: "主策",
+    reviewer: "复核人",
+    member: "成员",
+    viewer: "成员",
+  };
+
+  return {
+    id: member.userId,
+    name: member.displayName || member.email || member.userId.slice(0, 8),
+    role: roleByAccess[member.accessLevel],
+    primaryDiscipline: "文档",
+    conflictReviewer: member.accessLevel === "owner" || member.accessLevel === "reviewer",
+    joinedAt: member.createdAt,
+  };
 }
