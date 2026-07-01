@@ -344,6 +344,12 @@ export default function GuildBoardApp() {
   };
 
   const enterLiveMode = () => {
+    const confirmation = window.prompt(
+      "此操作会清空当前项目状态中的成员池、任务、历史问卷、申诉、结算快照和奖金决议，并会在云端同步后覆盖当前项目 JSON。不会删除 Supabase 用户账号或项目成员表。若确认执行，请输入：清空协作数据",
+    );
+    if (confirmation !== "清空协作数据") {
+      return;
+    }
     setState((current) => createLiveProjectState(current));
     clearLocalState();
   };
@@ -430,7 +436,11 @@ export default function GuildBoardApp() {
               <div className="flex flex-col gap-3 xl:items-end">
                 <AuthWidget auth={auth} />
                 <div className="flex flex-wrap gap-2">
-                  <IconButton icon={RotateCcw} label="进入实战模式" onClick={enterLiveMode} />
+                  <IconButton
+                    icon={RotateCcw}
+                    label="清空协作数据"
+                    onClick={enterLiveMode}
+                  />
                   <IconButton
                     icon={Save}
                     label={persistenceStatus.state === "error" ? "保存异常" : "已自动保存"}

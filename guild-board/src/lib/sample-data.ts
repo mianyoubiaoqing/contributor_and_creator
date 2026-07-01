@@ -44,8 +44,8 @@ export function createLiveProjectState(current?: ProjectState): ProjectState {
       {
         id: `log-live-reset-${Date.now()}`,
         actor: "系统",
-        action: "进入实战模式",
-        target: "清空示例成员、任务、互评、申诉和结算",
+        action: "清空协作数据",
+        target: "清空成员池、任务、历史问卷、申诉、结算快照和奖金决议",
         createdAt: new Intl.DateTimeFormat("zh-CN", {
           year: "numeric",
           month: "2-digit",
@@ -57,4 +57,3 @@ export function createLiveProjectState(current?: ProjectState): ProjectState {
     ],
   };
 }
-
