@@ -7,7 +7,6 @@ import {
   useReactTable,
   type ColumnDef,
 } from "@tanstack/react-table";
-import ReactECharts from "echarts-for-react";
 import {
   AlertTriangle,
   Archive,
@@ -29,21 +28,14 @@ import {
   Scale,
   Send,
   ShieldCheck,
-  Trophy,
   UserPlus,
   Users,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { clsx } from "clsx";
 import {
-  calculateSettlementLines,
-  formatCurrency,
-  formatNumber,
   getDifficultyDelta,
   getMemberName,
-  getPrizeDistribution,
-  getSettlementTotal,
-  getTaskBasePoints,
   getTaskDifficulty,
 } from "@/lib/calculations";
 import { createLiveProjectState, initialState } from "@/lib/sample-data";
@@ -69,12 +61,9 @@ import {
   type CloudProjectMember,
   type Discipline,
   type Member,
-  type PeerReview,
   type ProjectAccessLevel,
   type ProjectInvite,
-  type PrizeDecision,
   type ProjectState,
-  type SettlementSnapshot,
   type Task,
   type TaskStatus,
 } from "@/lib/types";
@@ -84,7 +73,6 @@ type Tab =
   | "tasks"
   | "members"
   | "github"
-  | "reviews"
   | "settlement"
   | "appeals";
 
@@ -111,12 +99,11 @@ const statusTone: Record<TaskStatus, string> = {
 };
 
 const tabItems: Array<{ id: Tab; label: string; icon: typeof GanttChartSquare }> = [
-  { id: "overview", label: "项目", icon: GanttChartSquare },
-  { id: "tasks", label: "任务", icon: ListChecks },
-  { id: "members", label: "成员", icon: UserPlus },
-  { id: "github", label: "GitHub", icon: GitBranch },
-  { id: "reviews", label: "互评", icon: Users },
-  { id: "settlement", label: "结算", icon: Scale },
+  { id: "overview", label: "项目大厅", icon: GanttChartSquare },
+  { id: "tasks", label: "任务告示板", icon: ListChecks },
+  { id: "members", label: "成员与邀请", icon: UserPlus },
+  { id: "github", label: "仓库证据", icon: GitBranch },
+  { id: "settlement", label: "结算暂存", icon: Scale },
   { id: "appeals", label: "申诉", icon: ShieldCheck },
 ];
 
@@ -139,30 +126,10 @@ export default function GuildBoardApp() {
     state: "loading",
     message: "正在加载项目状态",
   });
-  const [selectedRaterId, setSelectedRaterId] = useState(
-    initialState.members[0]?.id ?? "",
-  );
-  const [selectedTargetId, setSelectedTargetId] = useState(
-    initialState.members[1]?.id ?? "",
-  );
-  const [reviewScores, setReviewScores] = useState({
-    reliability: 4,
-    collaboration: 4,
-    craft: 4,
-    quality: 4,
-    support: 4,
-    note: "",
-  });
   const [appealForm, setAppealForm] = useState({
     memberId: initialState.members[0]?.id ?? "",
     taskId: initialState.tasks[0]?.id ?? "",
     reason: "",
-  });
-  const [prizeForm, setPrizeForm] = useState({
-    status: "等待奖金结果" as PrizeDecision["status"],
-    grossPrize: 0,
-    deductions: 0,
-    note: "结算阶段后再确认奖金是否存在与具体分配。",
   });
   const [newTask, setNewTask] = useState<NewTaskForm>(() => ({
     title: "",
@@ -204,13 +171,10 @@ export default function GuildBoardApp() {
     }
   }, [accessToken, isLoaded, state]);
 
-  const settlementLines = useMemo(() => calculateSettlementLines(state), [state]);
-  const latestSnapshot = state.snapshots.at(-1);
-  const activeLines = latestSnapshot?.lines ?? settlementLines;
   const totalTasks = state.tasks.length;
   const doneTasks = state.tasks.filter((task) => task.status === "已通过").length;
+  const totalEvidence = state.tasks.reduce((sum, task) => sum + task.evidence.length, 0);
   const pendingAppeals = state.appeals.filter((appeal) => appeal.status === "待复核").length;
-  const latestPrizeDecision = state.prizeDecisions.at(-1);
 
   const addAudit = (actor: string, action: string, target: string) => {
     setState((current) => ({
@@ -319,42 +283,6 @@ export default function GuildBoardApp() {
     }
   };
 
-  const saveReview = () => {
-    const review: PeerReview = {
-      id: createId("review"),
-      raterId: selectedRaterId,
-      targetId: selectedTargetId,
-      reliability: reviewScores.reliability,
-      collaboration: reviewScores.collaboration,
-      craft: reviewScores.craft,
-      quality: reviewScores.quality,
-      support: reviewScores.support,
-      note: reviewScores.note,
-    };
-
-    setState((current) => ({
-      ...current,
-      reviews: [
-        review,
-        ...current.reviews.filter(
-          (item) =>
-            item.raterId !== selectedRaterId || item.targetId !== selectedTargetId,
-        ),
-      ],
-      auditLog: [
-        {
-          id: createId("log"),
-          actor: getMemberName(current.members, selectedRaterId),
-          action: "提交互评",
-          target: getMemberName(current.members, selectedTargetId),
-          createdAt: nowLabel(),
-        },
-        ...current.auditLog,
-      ],
-    }));
-    setReviewScores((current) => ({ ...current, note: "" }));
-  };
-
   const submitAppeal = () => {
     if (!appealForm.reason.trim()) {
       return;
@@ -398,7 +326,7 @@ export default function GuildBoardApp() {
               resolution:
                 status === "已接受"
                   ? "复核通过，后续应创建任务变更记录。"
-                  : "证据不足，本轮不调整贡献点。",
+                  : "证据不足，本轮不调整任务记录。",
             }
           : appeal,
       ),
@@ -415,257 +343,177 @@ export default function GuildBoardApp() {
     }));
   };
 
-  const createSnapshot = () => {
-    const snapshot: SettlementSnapshot = {
-      id: createId("snapshot"),
-      status: "预结算",
-      createdAt: nowLabel(),
-      lines: settlementLines,
-    };
-
-    setState((current) => ({
-      ...current,
-      project: {
-        ...current.project,
-        phase: "预结算",
-      },
-      snapshots: [...current.snapshots, snapshot],
-      auditLog: [
-        {
-          id: createId("log"),
-          actor: "系统",
-          action: "生成贡献比例快照",
-          target: snapshot.id,
-          createdAt: snapshot.createdAt,
-        },
-        ...current.auditLog,
-      ],
-    }));
-  };
-
-  const freezeSnapshot = () => {
-    const snapshot = state.snapshots.at(-1);
-    if (!snapshot) {
-      return;
-    }
-
-    setState((current) => ({
-      ...current,
-      project: {
-        ...current.project,
-        phase: "已冻结",
-      },
-      snapshots: current.snapshots.map((item) =>
-        item.id === snapshot.id
-          ? {
-              ...item,
-              status: "冻结",
-              frozenAt: nowLabel(),
-            }
-          : item,
-      ),
-      auditLog: [
-        {
-          id: createId("log"),
-          actor: "复核组",
-          action: "冻结贡献比例",
-          target: snapshot.id,
-          createdAt: nowLabel(),
-        },
-        ...current.auditLog,
-      ],
-    }));
-  };
-
-  const savePrizeDecision = () => {
-    const snapshot = state.snapshots.at(-1);
-    if (!snapshot) {
-      return;
-    }
-
-    const decision: PrizeDecision = {
-      id: createId("prize"),
-      snapshotId: snapshot.id,
-      status: prizeForm.status,
-      grossPrize: prizeForm.status === "已获得奖金" ? prizeForm.grossPrize : 0,
-      deductions: prizeForm.status === "已获得奖金" ? prizeForm.deductions : 0,
-      note: prizeForm.note,
-      decidedAt: nowLabel(),
-    };
-
-    setState((current) => ({
-      ...current,
-      project: {
-        ...current.project,
-        phase: "奖金决议",
-      },
-      prizeDecisions: [...current.prizeDecisions, decision],
-      auditLog: [
-        {
-          id: createId("log"),
-          actor: "收款代表",
-          action: "创建奖金分配决议",
-          target: decision.status,
-          createdAt: decision.decidedAt,
-        },
-        ...current.auditLog,
-      ],
-    }));
-  };
-
   const enterLiveMode = () => {
     setState((current) => createLiveProjectState(current));
     clearLocalState();
   };
+  const activeTab = tabItems.find((item) => item.id === tab) ?? tabItems[0];
 
   return (
     <main className="min-h-screen bg-[#f6f3ee] text-stone-950">
-      <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-5 px-4 py-4 md:px-6 lg:px-8">
-        <header className="flex flex-col gap-4 border-b border-stone-300 pb-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2 text-sm text-stone-600">
-              <span className="rounded-sm border border-stone-300 bg-white px-2 py-1">
-                {state.project.eventName}
-              </span>
-              <span className="rounded-sm border border-emerald-200 bg-emerald-50 px-2 py-1 text-emerald-800">
-                {state.project.phase}
-              </span>
-              <span className="rounded-sm border border-stone-300 bg-white px-2 py-1">
-                规则 {state.project.rulesVersion}
-              </span>
-              <span
-                className={clsx(
-                  "inline-flex items-center gap-1 rounded-sm border px-2 py-1",
-                  persistenceStatus.mode === "cloud"
-                    ? "border-sky-200 bg-sky-50 text-sky-800"
-                    : "border-stone-300 bg-white text-stone-600",
-                )}
-                title={persistenceStatus.message}
-              >
-                <Cloud className="h-3.5 w-3.5" aria-hidden="true" />
-                {persistenceStatus.mode === "cloud" ? "云端" : "本地"}
-              </span>
-            </div>
-            <h1 className="mt-3 text-2xl font-semibold tracking-normal md:text-3xl">
-              {state.project.name}
-            </h1>
+      <div className="mx-auto grid w-full max-w-[1480px] gap-4 px-3 py-3 md:px-5 md:py-5 lg:grid-cols-[244px_minmax(0,1fr)]">
+        <aside className="hidden min-h-[calc(100vh-40px)] rounded-lg border border-stone-300 bg-white p-4 lg:flex lg:flex-col">
+          <div>
+            <p className="text-xs font-medium text-teal-700">{state.project.eventName}</p>
+            <h1 className="mt-2 text-xl font-semibold leading-7">{state.project.name}</h1>
+            <p className="mt-2 text-sm leading-6 text-stone-600">
+              Game Jam 协作服务台
+            </p>
           </div>
 
-          <div className="flex flex-col gap-3 lg:items-end">
-            <AuthWidget auth={auth} />
-            <div className="flex flex-wrap gap-2">
-              <IconButton icon={RotateCcw} label="进入实战模式" onClick={enterLiveMode} />
-              <IconButton
-                icon={Save}
-                label={persistenceStatus.state === "error" ? "保存异常" : "已自动保存"}
-                onClick={() => addAudit("系统", "手动确认保存", "项目状态")}
-              />
-            </div>
+          <nav className="mt-6 grid gap-1">
+            {tabItems.map((item) => {
+              const Icon = item.icon;
+              const active = tab === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={clsx(
+                    "flex min-h-11 items-center gap-3 rounded-md border px-3 text-left text-sm font-medium transition",
+                    active
+                      ? "border-teal-200 bg-teal-50 text-teal-900"
+                      : "border-transparent text-stone-600 hover:bg-stone-50 hover:text-stone-950",
+                  )}
+                  onClick={() => setTab(item.id)}
+                >
+                  <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  {item.label}
+                </button>
+              );
+            })}
+          </nav>
+
+          <div className="mt-auto rounded-md border border-amber-300 bg-amber-50 p-3 text-sm leading-6 text-amber-950">
+            <p className="font-semibold">贡献度系统暂时隐藏</p>
+            <p className="mt-1 text-xs text-amber-900">
+              保留任务难度与仓库证据，评分与分成模型等待重新设计。
+            </p>
           </div>
-        </header>
+        </aside>
 
-        <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <Metric label="成员" value={`${state.members.length} 人`} icon={Users} />
-          <Metric label="任务通过" value={`${doneTasks}/${totalTasks}`} icon={CheckCircle2} />
-          <Metric
-            label="当前贡献总分"
-            value={formatNumber(getSettlementTotal(settlementLines))}
-            icon={Scale}
-          />
-          <Metric label="待复核申诉" value={`${pendingAppeals} 条`} icon={AlertTriangle} />
-        </section>
+        <div className="grid min-w-0 gap-4">
+          <header className="rounded-lg border border-stone-300 bg-white p-4 md:p-5">
+            <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2 text-sm text-stone-600">
+                  <span className="rounded-sm border border-stone-300 bg-stone-50 px-2 py-1">
+                    {activeTab.label}
+                  </span>
+                  <span className="rounded-sm border border-emerald-200 bg-emerald-50 px-2 py-1 text-emerald-800">
+                    {state.project.phase}
+                  </span>
+                  <span className="rounded-sm border border-stone-300 bg-stone-50 px-2 py-1">
+                    规则 {state.project.rulesVersion}
+                  </span>
+                  <span
+                    className={clsx(
+                      "inline-flex items-center gap-1 rounded-sm border px-2 py-1",
+                      persistenceStatus.mode === "cloud"
+                        ? "border-sky-200 bg-sky-50 text-sky-800"
+                        : "border-stone-300 bg-stone-50 text-stone-600",
+                    )}
+                    title={persistenceStatus.message}
+                  >
+                    <Cloud className="h-3.5 w-3.5" aria-hidden="true" />
+                    {persistenceStatus.mode === "cloud" ? "云端" : "本地"}
+                  </span>
+                </div>
+                <h2 className="mt-3 text-2xl font-semibold tracking-normal md:text-3xl">
+                  {state.project.name}
+                </h2>
+                <p className="mt-2 max-w-3xl text-sm leading-6 text-stone-600">
+                  以任务领取、证据沉淀、验收流转为核心；贡献度、互评与奖金比例已暂时隐藏。
+                </p>
+              </div>
 
-        <nav className="flex gap-1 overflow-x-auto border-b border-stone-300">
-          {tabItems.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                className={clsx(
-                  "flex min-h-11 min-w-24 items-center justify-center gap-2 border-b-2 px-3 text-sm font-medium transition",
-                  tab === item.id
-                    ? "border-stone-950 text-stone-950"
-                    : "border-transparent text-stone-500 hover:text-stone-900",
-                )}
-                onClick={() => setTab(item.id)}
-              >
-                <Icon className="h-4 w-4" aria-hidden="true" />
-                {item.label}
-              </button>
-            );
-          })}
-        </nav>
+              <div className="flex flex-col gap-3 xl:items-end">
+                <AuthWidget auth={auth} />
+                <div className="flex flex-wrap gap-2">
+                  <IconButton icon={RotateCcw} label="进入实战模式" onClick={enterLiveMode} />
+                  <IconButton
+                    icon={Save}
+                    label={persistenceStatus.state === "error" ? "保存异常" : "已自动保存"}
+                    onClick={() => addAudit("系统", "手动确认保存", "项目状态")}
+                  />
+                </div>
+              </div>
+            </div>
+          </header>
 
-        {tab === "overview" && (
-          <OverviewPanel state={state} updateProject={updateProject} />
-        )}
+          <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <Metric label="成员" value={`${state.members.length} 人`} icon={Users} />
+            <Metric label="任务通过" value={`${doneTasks}/${totalTasks}`} icon={CheckCircle2} />
+            <Metric label="证据记录" value={`${totalEvidence} 条`} icon={GitPullRequest} />
+            <Metric label="待复核申诉" value={`${pendingAppeals} 条`} icon={AlertTriangle} />
+          </section>
 
-        {tab === "tasks" && (
-          <TaskPanel
-            state={state}
-            newTask={newTask}
-            setNewTask={setNewTask}
-            addTask={addTask}
-            updateTask={updateTask}
-            updateTaskStatus={updateTaskStatus}
-            handleDragEnd={handleDragEnd}
-          />
-        )}
+          <nav className="flex gap-1 overflow-x-auto rounded-lg border border-stone-300 bg-white px-2 lg:hidden">
+            {tabItems.map((item) => {
+              const Icon = item.icon;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={clsx(
+                    "flex min-h-12 min-w-fit items-center justify-center gap-2 border-b-2 px-3 text-sm font-medium transition",
+                    tab === item.id
+                      ? "border-teal-700 text-teal-900"
+                      : "border-transparent text-stone-500 hover:text-stone-900",
+                  )}
+                  onClick={() => setTab(item.id)}
+                >
+                  <Icon className="h-4 w-4" aria-hidden="true" />
+                  {item.label}
+                </button>
+              );
+            })}
+          </nav>
 
-        {tab === "members" && (
-          <MemberPanel
-            auth={auth}
-            onSyncMembers={(cloudMembers) =>
-              setState((current) => ({
-                ...current,
-                members: cloudMembers
-                  .filter((member) => member.approvalStatus === "approved")
-                  .map(mapCloudMemberToProjectMember),
-              }))
-            }
-          />
-        )}
+          {tab === "overview" && (
+            <OverviewPanel state={state} updateProject={updateProject} />
+          )}
 
-        {tab === "github" && <GitHubPanel state={state} />}
+          {tab === "tasks" && (
+            <TaskPanel
+              state={state}
+              newTask={newTask}
+              setNewTask={setNewTask}
+              addTask={addTask}
+              updateTask={updateTask}
+              updateTaskStatus={updateTaskStatus}
+              handleDragEnd={handleDragEnd}
+            />
+          )}
 
-        {tab === "reviews" && (
-          <ReviewPanel
-            state={state}
-            selectedRaterId={selectedRaterId}
-            selectedTargetId={selectedTargetId}
-            reviewScores={reviewScores}
-            setSelectedRaterId={setSelectedRaterId}
-            setSelectedTargetId={setSelectedTargetId}
-            setReviewScores={setReviewScores}
-            saveReview={saveReview}
-          />
-        )}
+          {tab === "members" && (
+            <MemberPanel
+              auth={auth}
+              onSyncMembers={(cloudMembers) =>
+                setState((current) => ({
+                  ...current,
+                  members: cloudMembers
+                    .filter((member) => member.approvalStatus === "approved")
+                    .map(mapCloudMemberToProjectMember),
+                }))
+              }
+            />
+          )}
 
-        {tab === "settlement" && (
-          <SettlementPanel
-            state={state}
-            liveLines={settlementLines}
-            activeLines={activeLines}
-            latestSnapshot={latestSnapshot}
-            latestPrizeDecision={latestPrizeDecision}
-            prizeForm={prizeForm}
-            setPrizeForm={setPrizeForm}
-            createSnapshot={createSnapshot}
-            freezeSnapshot={freezeSnapshot}
-            savePrizeDecision={savePrizeDecision}
-          />
-        )}
+          {tab === "github" && <GitHubPanel state={state} />}
 
-        {tab === "appeals" && (
-          <AppealPanel
-            state={state}
-            appealForm={appealForm}
-            setAppealForm={setAppealForm}
-            submitAppeal={submitAppeal}
-            resolveAppeal={resolveAppeal}
-          />
-        )}
+          {tab === "settlement" && <SettlementPanel state={state} />}
+
+          {tab === "appeals" && (
+            <AppealPanel
+              state={state}
+              appealForm={appealForm}
+              setAppealForm={setAppealForm}
+              submitAppeal={submitAppeal}
+              resolveAppeal={resolveAppeal}
+            />
+          )}
+        </div>
       </div>
     </main>
   );
@@ -907,7 +755,7 @@ function TaskPanel({
       </DndContext>
 
       <div className="rounded-md border border-stone-300 bg-white p-4">
-        <SectionTitle icon={ClipboardCheck} title="任务表与结算因子" />
+        <SectionTitle icon={ClipboardCheck} title="任务表与验收状态" />
         <TaskTable
           tasks={state.tasks}
           members={state.members}
@@ -989,7 +837,10 @@ function DraggableTask({ task, members }: { task: Task; members: Member[] }) {
             {task.discipline} / {task.module}
           </p>
           <p className="mt-2 text-xs text-stone-700">
-            {getMemberName(members, task.ownerId)} · {formatNumber(getTaskBasePoints(task))} 点
+            {getMemberName(members, task.ownerId)} · 截止 {task.dueAt}
+          </p>
+          <p className="mt-1 text-xs text-stone-500">
+            难度 {getTaskDifficulty(task)} · 证据 {task.evidence.length} 条
           </p>
           {getDifficultyDelta(task) >= 2 && (
             <p className="mt-2 rounded-sm bg-amber-100 px-2 py-1 text-xs text-amber-900">
@@ -1079,57 +930,13 @@ function TaskTable({
         ),
       },
       {
-        header: "质量",
-        cell: ({ row }) => (
-          <input
-            className="h-9 w-20 rounded-md border border-stone-300 px-2 text-sm"
-            type="number"
-            min={0.5}
-            max={1.3}
-            step={0.05}
-            value={row.original.quality}
-            onChange={(event) =>
-              updateTask(row.original.id, "quality", Number(event.target.value))
-            }
-          />
-        ),
-      },
-      {
-        header: "准时",
-        cell: ({ row }) => (
-          <input
-            className="h-9 w-20 rounded-md border border-stone-300 px-2 text-sm"
-            type="number"
-            min={0.5}
-            max={1.2}
-            step={0.05}
-            value={row.original.timeliness}
-            onChange={(event) =>
-              updateTask(row.original.id, "timeliness", Number(event.target.value))
-            }
-          />
-        ),
+        header: "截止",
+        accessorKey: "dueAt",
       },
       {
         header: "证据",
         cell: ({ row }) => (
-          <input
-            className="h-9 w-20 rounded-md border border-stone-300 px-2 text-sm"
-            type="number"
-            min={0}
-            max={1}
-            step={0.05}
-            value={row.original.evidenceStrength}
-            onChange={(event) =>
-              updateTask(row.original.id, "evidenceStrength", Number(event.target.value))
-            }
-          />
-        ),
-      },
-      {
-        header: "贡献点",
-        cell: ({ row }) => (
-          <span className="font-medium">{formatNumber(getTaskBasePoints(row.original))}</span>
+          <span className="font-medium">{row.original.evidence.length} 条</span>
         ),
       },
     ],
@@ -1143,33 +950,77 @@ function TaskTable({
   });
 
   return (
-    <div className="mt-4 overflow-x-auto">
-      <table className="w-full min-w-[1120px] border-collapse text-left text-sm">
-        <thead>
-          {table.getHeaderGroups().map((headerGroup) => (
-            <tr key={headerGroup.id} className="border-b border-stone-300">
-              {headerGroup.headers.map((header) => (
-                <th key={header.id} className="px-3 py-3 font-semibold text-stone-700">
-                  {header.isPlaceholder
-                    ? null
-                    : flexRender(header.column.columnDef.header, header.getContext())}
-                </th>
+    <div className="mt-4">
+      <div className="grid gap-3 md:hidden">
+        {tasks.map((task) => (
+          <article key={task.id} className="rounded-md border border-stone-200 bg-stone-50 p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="font-medium">{task.title}</p>
+                <p className="mt-1 text-xs text-stone-600">
+                  {task.discipline} / {task.module}
+                </p>
+              </div>
+              <span
+                className={clsx(
+                  "shrink-0 rounded-sm border px-2 py-1 text-xs",
+                  statusTone[task.status],
+                )}
+              >
+                {task.status}
+              </span>
+            </div>
+            <div className="mt-3 grid gap-2 text-sm text-stone-700">
+              <p>负责人：{getMemberName(members, task.ownerId)}</p>
+              <p>
+                难度：{getTaskDifficulty(task)}（{task.difficultyPlanner}/
+                {task.difficultyAi}/{task.difficultyMember}）
+              </p>
+              <p>进度：{task.completion}% · 截止：{task.dueAt}</p>
+              <p>证据：{task.evidence.length} 条</p>
+            </div>
+            <select
+              className="mt-3 min-h-10 w-full rounded-md border border-stone-300 bg-white px-2 text-sm"
+              value={task.status}
+              onChange={(event) => updateTaskStatus(task.id, event.target.value as TaskStatus)}
+            >
+              {taskStatuses.map((status) => (
+                <option key={status} value={status}>
+                  {status}
+                </option>
               ))}
-            </tr>
-          ))}
-        </thead>
-        <tbody>
-          {table.getRowModel().rows.map((row) => (
-            <tr key={row.id} className="border-b border-stone-200 align-top">
-              {row.getVisibleCells().map((cell) => (
-                <td key={cell.id} className="px-3 py-3">
-                  {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+            </select>
+          </article>
+        ))}
+      </div>
+      <div className="hidden overflow-x-auto md:block">
+        <table className="w-full min-w-[860px] border-collapse text-left text-sm">
+          <thead>
+            {table.getHeaderGroups().map((headerGroup) => (
+              <tr key={headerGroup.id} className="border-b border-stone-300">
+                {headerGroup.headers.map((header) => (
+                  <th key={header.id} className="px-3 py-3 font-semibold text-stone-700">
+                    {header.isPlaceholder
+                      ? null
+                      : flexRender(header.column.columnDef.header, header.getContext())}
+                  </th>
+                ))}
+              </tr>
+            ))}
+          </thead>
+          <tbody>
+            {table.getRowModel().rows.map((row) => (
+              <tr key={row.id} className="border-b border-stone-200 align-top">
+                {row.getVisibleCells().map((cell) => (
+                  <td key={cell.id} className="px-3 py-3">
+                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -1390,7 +1241,7 @@ function MemberPanel({
                 label="同步到任务成员池"
                 onClick={() => {
                   onSyncMembers(members);
-                  setMessage("已把批准成员同步到任务负责人/互评成员池");
+                  setMessage("已把批准成员同步到任务负责人和复核人选项");
                 }}
                 disabled={loading}
               />
@@ -1658,341 +1509,45 @@ function GitHubPanel({ state }: { state: ProjectState }) {
   );
 }
 
-function ReviewPanel({
-  state,
-  selectedRaterId,
-  selectedTargetId,
-  reviewScores,
-  setSelectedRaterId,
-  setSelectedTargetId,
-  setReviewScores,
-  saveReview,
-}: {
-  state: ProjectState;
-  selectedRaterId: string;
-  selectedTargetId: string;
-  reviewScores: {
-    reliability: number;
-    collaboration: number;
-    craft: number;
-    quality: number;
-    support: number;
-    note: string;
-  };
-  setSelectedRaterId: (value: string) => void;
-  setSelectedTargetId: (value: string) => void;
-  setReviewScores: React.Dispatch<React.SetStateAction<typeof reviewScores>>;
-  saveReview: () => void;
-}) {
-  return (
-    <section className="grid gap-5 xl:grid-cols-[minmax(360px,0.8fr)_minmax(0,1.2fr)]">
-      <div className="rounded-md border border-stone-300 bg-white p-4">
-        <SectionTitle icon={Users} title="成员互评问卷" />
-        <div className="mt-4 grid gap-3">
-          <MemberSelect
-            label="评分人"
-            members={state.members}
-            value={selectedRaterId}
-            onChange={setSelectedRaterId}
-          />
-          <MemberSelect
-            label="被评分人"
-            members={state.members}
-            value={selectedTargetId}
-            onChange={setSelectedTargetId}
-          />
-          <ScoreSlider
-            label="交付可靠性"
-            value={reviewScores.reliability}
-            onChange={(value) =>
-              setReviewScores((current) => ({ ...current, reliability: value }))
-            }
-          />
-          <ScoreSlider
-            label="协作质量"
-            value={reviewScores.collaboration}
-            onChange={(value) =>
-              setReviewScores((current) => ({ ...current, collaboration: value }))
-            }
-          />
-          <ScoreSlider
-            label="专业贡献"
-            value={reviewScores.craft}
-            onChange={(value) =>
-              setReviewScores((current) => ({ ...current, craft: value }))
-            }
-          />
-          <ScoreSlider
-            label="质量意识"
-            value={reviewScores.quality}
-            onChange={(value) =>
-              setReviewScores((current) => ({ ...current, quality: value }))
-            }
-          />
-          <ScoreSlider
-            label="项目支持"
-            value={reviewScores.support}
-            onChange={(value) =>
-              setReviewScores((current) => ({ ...current, support: value }))
-            }
-          />
-          <label className="block text-sm font-medium text-stone-700">
-            说明
-            <textarea
-              className="mt-2 min-h-24 w-full resize-y rounded-md border border-stone-300 bg-stone-50 px-3 py-2 text-sm outline-none focus:border-stone-900"
-              value={reviewScores.note}
-              onChange={(event) =>
-                setReviewScores((current) => ({ ...current, note: event.target.value }))
-              }
-            />
-          </label>
-          <IconButton icon={Send} label="提交互评" onClick={saveReview} />
-        </div>
-      </div>
-
-      <div className="rounded-md border border-stone-300 bg-white p-4">
-        <SectionTitle icon={ClipboardCheck} title="已提交互评" />
-        <div className="mt-4 overflow-x-auto">
-          <table className="w-full min-w-[720px] border-collapse text-left text-sm">
-            <thead>
-              <tr className="border-b border-stone-300">
-                <th className="px-3 py-3">评分人</th>
-                <th className="px-3 py-3">对象</th>
-                <th className="px-3 py-3">平均</th>
-                <th className="px-3 py-3">说明</th>
-              </tr>
-            </thead>
-            <tbody>
-              {state.reviews.map((review) => {
-                const average =
-                  (review.reliability +
-                    review.collaboration +
-                    review.craft +
-                    review.quality +
-                    review.support) /
-                  5;
-                return (
-                  <tr key={review.id} className="border-b border-stone-200">
-                    <td className="px-3 py-3">{getMemberName(state.members, review.raterId)}</td>
-                    <td className="px-3 py-3">{getMemberName(state.members, review.targetId)}</td>
-                    <td className="px-3 py-3">{average.toFixed(1)}</td>
-                    <td className="px-3 py-3 text-stone-600">{review.note}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-function SettlementPanel({
-  state,
-  liveLines,
-  activeLines,
-  latestSnapshot,
-  latestPrizeDecision,
-  prizeForm,
-  setPrizeForm,
-  createSnapshot,
-  freezeSnapshot,
-  savePrizeDecision,
-}: {
-  state: ProjectState;
-  liveLines: ReturnType<typeof calculateSettlementLines>;
-  activeLines: ReturnType<typeof calculateSettlementLines>;
-  latestSnapshot?: SettlementSnapshot;
-  latestPrizeDecision?: PrizeDecision;
-  prizeForm: {
-    status: PrizeDecision["status"];
-    grossPrize: number;
-    deductions: number;
-    note: string;
-  };
-  setPrizeForm: React.Dispatch<React.SetStateAction<typeof prizeForm>>;
-  createSnapshot: () => void;
-  freezeSnapshot: () => void;
-  savePrizeDecision: () => void;
-}) {
-  const chartOption = useMemo(
-    () => ({
-      tooltip: {
-        trigger: "item",
-        formatter: "{b}: {d}%",
-      },
-      legend: {
-        bottom: 0,
-        type: "scroll",
-      },
-      series: [
-        {
-          type: "pie",
-          radius: ["42%", "70%"],
-          center: ["50%", "42%"],
-          avoidLabelOverlap: true,
-          data: activeLines.map((line) => ({
-            name: getMemberName(state.members, line.memberId),
-            value: line.ratio,
-          })),
-        },
-      ],
-    }),
-    [activeLines, state.members],
-  );
-
-  const distribution = latestPrizeDecision
-    ? getPrizeDistribution(
-        activeLines,
-        latestPrizeDecision.grossPrize,
-        latestPrizeDecision.deductions,
-      )
-    : [];
+function SettlementPanel({ state }: { state: ProjectState }) {
+  const archivedReviews = state.reviews.length;
+  const archivedSnapshots = state.snapshots.length;
+  const archivedPrizeDecisions = state.prizeDecisions.length;
 
   return (
-    <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
-      <div className="rounded-md border border-stone-300 bg-white p-4">
-        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <SectionTitle icon={Scale} title="贡献比例结算" />
-          <div className="flex flex-wrap gap-2">
-            <IconButton icon={Archive} label="生成预结算" onClick={createSnapshot} />
-            <IconButton
-              icon={ShieldCheck}
-              label="冻结比例"
-              onClick={freezeSnapshot}
-              disabled={!latestSnapshot || latestSnapshot.status === "冻结"}
-            />
-          </div>
-        </div>
-
-        <div className="mt-4 grid gap-3 md:grid-cols-3">
-          <InfoStrip label="实时总分" value={formatNumber(getSettlementTotal(liveLines))} />
-          <InfoStrip
-            label="快照状态"
-            value={latestSnapshot ? latestSnapshot.status : "尚未生成"}
-          />
-          <InfoStrip
-            label="冻结时间"
-            value={latestSnapshot?.frozenAt ?? "等待冻结"}
-          />
-        </div>
-
-        <div className="mt-5 overflow-x-auto">
-          <table className="w-full min-w-[760px] border-collapse text-left text-sm">
-            <thead>
-              <tr className="border-b border-stone-300">
-                <th className="px-3 py-3">成员</th>
-                <th className="px-3 py-3">任务点</th>
-                <th className="px-3 py-3">互评点</th>
-                <th className="px-3 py-3">职责点</th>
-                <th className="px-3 py-3">最终分</th>
-                <th className="px-3 py-3">贡献比例</th>
-              </tr>
-            </thead>
-            <tbody>
-              {activeLines.map((line) => (
-                <tr key={line.memberId} className="border-b border-stone-200">
-                  <td className="px-3 py-3 font-medium">
-                    {getMemberName(state.members, line.memberId)}
-                  </td>
-                  <td className="px-3 py-3">{formatNumber(line.taskPoints)}</td>
-                  <td className="px-3 py-3">{formatNumber(line.peerPoints)}</td>
-                  <td className="px-3 py-3">{formatNumber(line.keyResponsibilityPoints)}</td>
-                  <td className="px-3 py-3">{formatNumber(line.finalPoints)}</td>
-                  <td className="px-3 py-3 font-semibold">{line.ratio}%</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <aside className="grid gap-5">
-        <div className="rounded-md border border-stone-300 bg-white p-4">
-          <SectionTitle icon={Trophy} title="贡献饼图" />
-          <div className="mt-4 h-80">
-            <ReactECharts option={chartOption} style={{ height: "100%", width: "100%" }} />
-          </div>
-        </div>
-
-        <div className="rounded-md border border-stone-300 bg-white p-4">
-          <SectionTitle icon={Trophy} title="奖金分配决议" />
-          <p className="mt-3 text-sm leading-6 text-stone-600">
-            贡献比例可以先冻结；是否获奖、奖金金额和扣除项在这里后置记录。
+    <section className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="rounded-md border border-stone-300 bg-white p-5">
+        <SectionTitle icon={Scale} title="结算暂存" />
+        <div className="mt-5 rounded-md border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950">
+          <p className="font-semibold">贡献度系统暂时隐藏，等待重新设计。</p>
+          <p className="mt-2">
+            当前版本不会展示互评分、任务贡献点、最终贡献比例、饼图或奖金分配建议。
+            已有历史记录仍保留在云端项目状态中，本次停用不会删除服务端用户数据或结算数据。
           </p>
-          <div className="mt-4 grid gap-3">
-            <SelectField
-              label="奖金状态"
-              value={prizeForm.status}
-              options={["等待奖金结果", "未获得奖金", "已获得奖金"]}
-              onChange={(value) =>
-                setPrizeForm((current) => ({
-                  ...current,
-                  status: value as PrizeDecision["status"],
-                }))
-              }
-            />
-            <NumberField
-              label="奖金总额"
-              value={prizeForm.grossPrize}
-              min={0}
-              max={999999}
-              onChange={(value) =>
-                setPrizeForm((current) => ({ ...current, grossPrize: value }))
-              }
-            />
-            <NumberField
-              label="扣除项"
-              value={prizeForm.deductions}
-              min={0}
-              max={999999}
-              onChange={(value) =>
-                setPrizeForm((current) => ({ ...current, deductions: value }))
-              }
-            />
-            <label className="block text-sm font-medium text-stone-700">
-              决议说明
-              <textarea
-                className="mt-2 min-h-20 w-full resize-y rounded-md border border-stone-300 bg-stone-50 px-3 py-2 text-sm outline-none focus:border-stone-900"
-                value={prizeForm.note}
-                onChange={(event) =>
-                  setPrizeForm((current) => ({ ...current, note: event.target.value }))
-                }
-              />
-            </label>
-            <IconButton
-              icon={Save}
-              label="保存奖金决议"
-              onClick={savePrizeDecision}
-              disabled={!latestSnapshot}
-            />
+        </div>
+
+        <div className="mt-5 grid gap-3 md:grid-cols-3">
+          <InfoStrip label="历史问卷" value={`${archivedReviews} 条已暂存`} />
+          <InfoStrip label="结算快照" value={`${archivedSnapshots} 份已暂存`} />
+          <InfoStrip label="奖金决议" value={`${archivedPrizeDecisions} 条已暂存`} />
+        </div>
+
+        <div className="mt-5 rounded-md border border-stone-200 bg-stone-50 p-4">
+          <h3 className="text-sm font-semibold text-stone-800">当前实战阶段建议</h3>
+          <div className="mt-3 grid gap-2 text-sm leading-6 text-stone-700">
+            <p>1. 继续使用任务告示板记录负责人、截止时间、难度和验收状态。</p>
+            <p>2. 继续使用 GitHub Webhook 收集 PR、Commit、Review 和构建证据。</p>
+            <p>3. 奖金或分成讨论暂时移出系统，等新的贡献模型确认后再恢复。</p>
           </div>
-          {latestPrizeDecision && (
-            <div className="mt-4 rounded-md border border-stone-200 bg-stone-50 p-3 text-sm">
-              <p className="font-medium">{latestPrizeDecision.status}</p>
-              <p className="mt-1 text-stone-600">{latestPrizeDecision.note}</p>
-              <p className="mt-2">
-                可分配金额：
-                {formatCurrency(
-                  Math.max(
-                    latestPrizeDecision.grossPrize - latestPrizeDecision.deductions,
-                    0,
-                  ),
-                )}
-              </p>
-              {distribution.length > 0 && (
-                <div className="mt-3 grid gap-1">
-                  {distribution.map((line) => (
-                    <div key={line.memberId} className="flex justify-between gap-2">
-                      <span>{getMemberName(state.members, line.memberId)}</span>
-                      <span>{formatCurrency(line.amount)}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+        </div>
+      </div>
+
+      <aside className="rounded-md border border-stone-300 bg-white p-5">
+        <SectionTitle icon={ClipboardCheck} title="保留能力" />
+        <div className="mt-4 grid gap-3 text-sm text-stone-700">
+          <InfoStrip label="任务难度" value="继续保留" />
+          <InfoStrip label="任务证据" value="继续保留" />
+          <InfoStrip label="移动端查看" value="已适配任务卡片" />
         </div>
       </aside>
     </section>
@@ -2327,34 +1882,6 @@ function MemberSelect({
       renderOption={(memberId) => getMemberName(members, memberId)}
       onChange={onChange}
     />
-  );
-}
-
-function ScoreSlider({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <label className="block text-sm font-medium text-stone-700">
-      <span className="flex items-center justify-between gap-3">
-        {label}
-        <span className="font-semibold">{value}</span>
-      </span>
-      <input
-        className="mt-2 h-2 w-full accent-stone-900"
-        type="range"
-        min={1}
-        max={5}
-        step={1}
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
-      />
-    </label>
   );
 }
 
